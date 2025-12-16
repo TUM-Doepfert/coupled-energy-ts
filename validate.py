@@ -144,8 +144,7 @@ def test_timeseries_generator():
         return True
     except Exception as e:
         logger.error(f"✗ Time series generator failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("Full traceback:")
         return False
 
 

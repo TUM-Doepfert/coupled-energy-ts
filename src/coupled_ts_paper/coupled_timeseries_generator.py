@@ -188,9 +188,13 @@ class CoupledTimeSeriesGenerator:
         hvac_heating = []
         hvac_cooling = []
         
+        max_occupancy = occupancy_df["occupancy"].max()
+        if max_occupancy == 0:
+            max_occupancy = 1
+        
         for idx, row in combined_df.iterrows():
             temp = row["temperature_2m"]
-            occupancy_ratio = row["occupancy"] / occupancy_df["occupancy"].max() if occupancy_df["occupancy"].max() > 0 else 0
+            occupancy_ratio = row["occupancy"] / max_occupancy
             
             # Heating when temp < 18°C, cooling when temp > 24°C
             heating_power = 0
