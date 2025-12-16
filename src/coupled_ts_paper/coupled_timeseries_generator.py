@@ -65,7 +65,7 @@ class CoupledTimeSeriesGenerator:
             DataFrame with occupancy time series
         """
         # Create hourly datetime index
-        date_range = pd.date_range(start=start_date, end=end_date, freq="H")
+        date_range = pd.date_range(start=start_date, end=end_date, freq="h")
         
         # Get occupancy schedule
         schedule = self.OCCUPANCY_SCHEDULES.get(
@@ -180,7 +180,7 @@ class CoupledTimeSeriesGenerator:
         # Get temperature from weather data if available
         if "temperature_2m" in weather_df.columns:
             combined_df = combined_df.join(weather_df[["temperature_2m"]], how="left")
-            combined_df["temperature_2m"].fillna(20, inplace=True)
+            combined_df["temperature_2m"] = combined_df["temperature_2m"].fillna(20)
         else:
             # Default temperature
             combined_df["temperature_2m"] = 20

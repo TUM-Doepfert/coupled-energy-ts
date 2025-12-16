@@ -62,17 +62,17 @@ class BuildingRCCalculator:
         )
 
         # Create TEASER project
-        prj = Project(load_data=True)
+        prj = Project()
         prj.name = f"{building_name}_project"
 
         # Get construction year based on insulation quality
         year_of_construction = self.CONSTRUCTION_YEARS.get(insulation_quality, 2000)
 
-        # Add building based on type
+        # Add building based on type using new API
         if building_type == "office":
             prj.add_non_residential(
-                method="bmvbs",
-                usage="office",
+                construction_data="iwu_heavy",
+                geometry_data="bmvbs_office",
                 name=building_name,
                 year_of_construction=year_of_construction,
                 number_of_floors=number_of_floors,
@@ -80,9 +80,14 @@ class BuildingRCCalculator:
                 net_leased_area=net_leased_area,
             )
         elif building_type in ["institute", "institute4", "institute8"]:
+            geometry_map = {
+                "institute": "bmvbs_institute",
+                "institute4": "bmvbs_institute4",
+                "institute8": "bmvbs_institute8",
+            }
             prj.add_non_residential(
-                method="bmvbs",
-                usage="institute",
+                construction_data="iwu_heavy",
+                geometry_data=geometry_map.get(building_type, "bmvbs_institute"),
                 name=building_name,
                 year_of_construction=year_of_construction,
                 number_of_floors=number_of_floors,
@@ -90,9 +95,10 @@ class BuildingRCCalculator:
                 net_leased_area=net_leased_area,
             )
         elif building_type in ["residential", "single_family_dwelling"]:
+            # For residential buildings use IWU data
             prj.add_residential(
-                method="iwu",
-                usage="single_family_dwelling",
+                construction_data="iwu_heavy",
+                geometry_data="iwu_single_family_dwelling",
                 name=building_name,
                 year_of_construction=year_of_construction,
                 number_of_floors=number_of_floors,
@@ -101,9 +107,6 @@ class BuildingRCCalculator:
             )
         else:
             raise ValueError(f"Unknown building type: {building_type}")
-
-        # Calculate building parameters
-        prj.calc_all_buildings()
 
         # Store project for later use
         self.projects[building_name] = prj
