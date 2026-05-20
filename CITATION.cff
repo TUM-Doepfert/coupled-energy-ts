@@ -1,0 +1,72 @@
+cff-version: 1.2.0
+message: "If you use this software or the Germany 2010 reference dataset, please cite the accompanying paper."
+title: "Deriving coupled electricity, heating and cooling time series from electricity demands"
+abstract: >-
+  A pluggable Python pipeline that derives coupled hourly residential
+  electricity, occupancy, weather, and heating/cooling time series
+  from any combination of measured load profiles, building archetypes,
+  and historical weather. Released alongside one example instantiation
+  (Germany 2010, ~3.3 M building-year simulations) and three
+  thermal-model classes (1R1C, 5R1C ISO 13790, 7R2C VDI 6007).
+type: software
+license: MIT
+repository-code: "https://github.com/TUM-Doepfert/coupled-energy-ts"
+authors:
+  - family-names: Doepfert
+    given-names: Markus
+    affiliation: "Technical University of Munich"
+    email: markus.doepfert@tum.de
+    orcid: "https://orcid.org/0000-0001-8720-2585"
+  - family-names: Escobar Viegas
+    given-names: Maximiliano Fernando
+    affiliation: "Technical University of Munich"
+  - family-names: Zinsmeister
+    given-names: Daniel
+    affiliation: "Technical University of Munich"
+  - family-names: Tzscheutschler
+    given-names: Peter
+    affiliation: "Technical University of Munich"
+  - family-names: Goebel
+    given-names: Christoph
+    affiliation: "Technical University of Munich"
+  - family-names: Hamacher
+    given-names: Thomas
+    affiliation: "Technical University of Munich"
+preferred-citation:
+  type: article
+  title: "Coupled time series of electricity demand, occupancy, weather, and thermal demand for residential buildings"
+  authors:
+    - family-names: Doepfert
+      given-names: Markus
+    - family-names: Escobar Viegas
+      given-names: Maximiliano Fernando
+    - family-names: Zinsmeister
+      given-names: Daniel
+    - family-names: Tzscheutschler
+      given-names: Peter
+    - family-names: Goebel
+      given-names: Christoph
+    - family-names: Hamacher
+      given-names: Thomas
+  journal: "Scientific Data"
+  publisher:
+    name: "Springer Nature"
+  year: 2026
+  # Placeholder DOIs
+  doi: "10.0000/PLACEHOLDER-PAPER-DOI"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.20288026"
+    description: "Zenodo archive of the Germany 2010 reference dataset."
+  - type: doi
+    value: "10.5281/zenodo.20289426"
+    description: "Zenodo archive of the code repository at time of publication."
+keywords:
+  - "coupled time series"
+  - "residential energy demand"
+  - "thermal simulation"
+  - "RC-model"
+  - "TEASER"
+  - "TABULA"
+  - "Open-Meteo"
+  - "EnTiSe"

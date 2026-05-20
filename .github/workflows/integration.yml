@@ -1,0 +1,33 @@
+name: integration
+
+# Runs the heavier / network-touching tests under tests/integration/:
+# TEASER + TABULA-DE archetype build, demandlib BDEW H0 synthesis, Open-
+# Meteo single-location fetch, and YAML provider-combination round-trips.
+# These are skipped in the default PR workflow (.github/workflows/test.yml)
+# because they're slower and depend on external services.
+
+on:
+  workflow_dispatch:        # manual trigger from the Actions tab
+  schedule:
+    - cron: '17 4 * * 1'    # 04:17 UTC every Monday — weekly canary
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run unit + integration tests
+        run: uv run pytest tests/ --run-integration -v

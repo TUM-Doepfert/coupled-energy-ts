@@ -1,0 +1,223 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Coupled time-series pipeline — reference Germany 2010 configuration
+# ─────────────────────────────────────────────────────────────────────────
+#
+# This file fully specifies one run of the pipeline. Copy it for your own
+# study, swap the parts you have data for, and run:
+#
+#     coupled-ts-paper run config/germany_2010.yml
+#
+# Every section lists the supported provider types and the parameters they
+# expect. Provider TYPE is the key (e.g. "teaser", "csv"); provider
+# PARAMETERS are the keys nested below.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+# ── 1. Run-level settings ────────────────────────────────────────────────
+
+# Which year to generate the dataset for. Must be supported by all
+# providers (e.g. weather year, electricity profile year).
+year: 2010
+
+# Where the pipeline writes its outputs. Subfolders for each record (B, E,
+# O, W, HC) are created inside.
+output_dir: output/
+
+# Which thermal model to run. Affects which archetype columns are required.
+#   r1c1   : 1 resistance + 1 capacitance (paper default; fastest)
+#   r5c1   : ISO 13790 (5R1C); slower but adds envelope thermal mass
+#   r7c2   : VDI 6007 (7R2C); slowest, distinguishes interior vs envelope mass
+thermal_model: r1c1
+
+# Sub-set of locations to simulate. The paper uses the full grid:
+#   all          : every location in the spatial grid (DE 10 km grid -> 4045
+#                  cells -> ~3.3 M building-year simulations with the default
+#                  74 profiles x 11 archetypes; 12-20 h on 8 cores). Use this
+#                  to reproduce the Germany 2010 dataset.
+#   [1, 2, 3]    : explicit list of location_ids — useful for debugging.
+#   random:N     : seeded random sample of N locations. Opt-in for fast
+#                  smoke tests / iteration; NOT the paper configuration.
+locations: all
+
+
+# ── 2. Archetype provider ────────────────────────────────────────────────
+
+# Building archetype thermal parameters. Outputs B.parquet.
+#
+# Supported providers:
+#
+#   teaser:
+#     Uses TEASER + a TABULA national typology to compute R, C from
+#     archetype geometry. Currently supported countries via TABULA: DE, DK
+#     (extendable in TEASER's data files). Required parameters:
+#       config_data         TEASER construction database key (e.g.
+#                           tabula_de_standard, tabula_dk_standard)
+#       geometry_data       TEASER geometry database key (e.g.
+#                           tabula_de_single_family_house)
+#       archetypes_csv      CSV listing archetype definitions
+#                           (canonical schema, same names as B.parquet):
+#                           archetype_id, construction_year, area_m2,
+#                           n_floors, height_floor_m
+#
+#   file:
+#     Reads a pre-built archetype table from a CSV or parquet file
+#     (format auto-detected by suffix) matching ArchetypeSchema (see
+#     src/providers/base.py). Use this if you have archetypes from
+#     EUReCA, MOIRAE, EnergyPlus, hand-curated national standards, or
+#     any other source — just produce the table.
+#     Required parameters:
+#       path                Path to a parquet/csv file
+#     (`type: csv` is accepted as a legacy alias.)
+#
+#   For the 5R1C / 7R2C models, the table must additionally include the
+#   ISO 13790 / VDI 6007 columns documented in src/providers/base.py.
+
+archetype_provider:
+  type: teaser
+  config_data: tabula_de_standard
+  geometry_data: tabula_de_single_family_house
+  archetypes_csv: input/archetypes.csv
+
+
+# ── 3. Electricity provider ──────────────────────────────────────────────
+
+# Household electricity profiles. Outputs E.parquet (one row per
+# (timestamp, profile_id), 15-minute resolution).
+#
+# Supported providers:
+#
+#   directory:
+#     Reads N csv files (one per profile) from a directory. Each file
+#     must have columns: timestamp, electricity_demand_W. Recommended
+#     for measured datasets like HTW Berlin (paper default).
+#     (`type: csv` is accepted as a legacy alias.)
+#     Required parameters:
+#       input_dir           Directory containing the csv files
+#       resolution          Sampling rate label of the source CSVs
+#                           ("1min", "15min", "1h"). Documentation only;
+#                           the provider does not resample.
+#
+#   parquet:
+#     Reads a pre-built long-form parquet matching ElectricitySchema.
+#     Required parameters:
+#       path                Path to parquet file
+#
+#   demandlib:
+#     Synthesises BDEW standard load profiles (German H0/G0/...) for a
+#     list of annual demands. Country-specific to Germany. Requires the
+#     `demandlib` package. Parameters:
+#       annual_demands_kwh  list[float] — one profile per entry
+#       profile_type        BDEW SLP label, default "h0"
+#       holidays_location   federal-state code, optional
+#       freq                output sampling rate, default "1h"
+#
+#   pylpg:
+#     Synthesises behaviour-based profiles via LoadProfileGenerator.
+#     Country-agnostic. Requires the `pylpg` package. Parameters:
+#       households   list[dict] — each {households, occupants_per_household,
+#                    energy_intensity?}
+#       freq         output sampling rate, default "1h"
+
+electricity_provider:
+  type: directory
+  input_dir: input/electricity/60min
+  resolution: 1h
+
+
+# ── 4. Occupancy provider ────────────────────────────────────────────────
+
+# Binary occupancy time series. Outputs O.parquet, indexed identically to
+# E.parquet.
+#
+# Supported providers:
+#
+#   geoma:
+#     Geometric Moving Average — derives occupancy from each electricity
+#     profile by classifying timesteps where p_t > g_t (g_t = exponential
+#     average of past p). Plus an evening rule: if occupied >= 1h between
+#     21–24 LOCAL time, the household is assumed occupied 00–09 LOCAL time.
+#     Country-agnostic — pass the matching IANA zone via `local_tz`.
+#     Parameters:
+#       alpha               Smoothing parameter (paper default 0.05)
+#       local_tz            IANA timezone for the night rule
+#                           (default "Europe/Berlin"). The pipeline
+#                           coerces input CSVs to UTC for DST safety, so
+#                           the night rule must be re-evaluated in local
+#                           wall-clock time.
+#
+#   file:
+#     Reads a pre-built long-form CSV or parquet matching OccupancySchema
+#     (format auto-detected by suffix).
+#     (`type: parquet` is accepted as a legacy alias.)
+#     Required parameters:
+#       path                Path to parquet/csv file
+
+occupancy_provider:
+  type: geoma
+  alpha: 0.05
+  local_tz: Europe/Berlin
+
+
+# ── 5. Weather provider ──────────────────────────────────────────────────
+
+# Per-location weather time series. Outputs W/locXXXX.parquet (one parquet
+# per location_id).
+#
+# Supported providers:
+#
+#   openmeteo:
+#     Fetches historical weather from Open-Meteo for each grid cell
+#     centroid. Free, no API key, global coverage. Slow on first run
+#     (rate-limited); subsequent runs reuse cached files. Parameters:
+#       grid_path           GeoPackage / shapefile of the spatial grid
+#                           (e.g. DE 10 km grid in EPSG:25832)
+#       cache_dir           Where to cache downloaded weather files
+#       interpolate_15min   true to interpolate to 15-min from hourly
+#
+#   file:
+#     Reads pre-existing weather files. Use this if you have weather data
+#     from a national service or measured station network.
+#     (`type: csv` is accepted as a legacy alias.)
+#     Parameters:
+#       weather_dir         Directory containing one parquet per
+#                           location_id (e.g. weather/locXXXX.parquet)
+#                           matching WeatherSchema
+#       location_mapping    CSV with columns (location_id, latitude,
+#                           longitude). Defines spatial layout.
+
+weather_provider:
+  type: openmeteo
+  grid_path: input/grid/DE_Grid_ETRS89-UTM32_10km.gpkg
+  cache_dir: input/weather/2010
+  interpolate_15min: false
+
+
+# ── 6. Simulation settings ───────────────────────────────────────────────
+
+# Heating and cooling simulation. Outputs HC/locXXXX/hc_archYY.parquet.
+#
+# Setpoints are FIXED at this single value across all archetypes/profiles.
+# To diversify (variable setpoints, schedule setbacks, custom ACH rules),
+# extend src/simulation.py or contribute a new "simulation" provider.
+
+simulation:
+  heating_setpoint_C: 20.0
+  # Cooling setpoint at the upper bound of the EN 16798-1 Cat II summer
+  # comfort band.
+  cooling_setpoint_C: 26.0
+  inhabitants: 2                 # default occupants per dwelling
+  gains_per_person_W: 80         # internal heat gain per occupant
+  # ACH (ventilation air-change-rate) model. Two built-in options:
+  #   "sinusoid"   : deterministic seasonal sinusoid, identical for every
+  #                  (location, archetype, profile). Cheap and reproducible
+  #   "rule_based" : presence + outdoor-T + season + per-profile night-window
+  #                  scenario (S1/S2/S3 assigned by profile_id % 3). More
+  #                  physically motivated; adds per-profile diversity to
+  #                  ventilation losses.
+  # Add new options by extending src/ach.py.
+  ach_model: rule_based
+  resolution: 60min
+  overwrite: false               # re-run even if output parquet exists
+
+# Number of parallel workers for the simulation step. -1 = all cores.
+n_jobs: -1

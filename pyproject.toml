@@ -1,0 +1,77 @@
+[project]
+name = "coupled-energy-ts"
+version = "0.1.0"
+description = "Pluggable Python pipeline for deriving coupled electricity, occupancy, weather, and heating/cooling time series — accompanies Doepfert et al., Nature Scientific Data."
+readme = "README.md"
+authors = [
+    { name = "Markus Doepfert",            email = "markus.doepfert@tum.de" },
+    { name = "Maximiliano Escobar Viegas", email = "ge53peh@mytum.de" },
+    { name = "Daniel Zinsmeister", email = "d.zinsmeister@tum.de"  },
+    { name = "Peter Tzscheutschler", email = "ptzscheu@tum.de" },
+    { name = "Christoph Goebel", email = "christoph.goebel@tum.de"  },
+    { name = "Thomas Hamacher", email = "thomas.hamacher@tum.de"  },
+]
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+keywords = [
+    "energy", "time-series", "heating", "cooling", "electricity",
+    "thermal-simulation", "1R1C", "5R1C", "TEASER", "EnTiSe",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "entise>=1.2.0,<1.3.0",  # pinned: R7C2 H_ve workaround in simulation.py is fragile to upstream changes
+    "geopandas",
+    "joblib",
+    "matplotlib",
+    "pandas",
+    "pyarrow",
+    "teaser",
+    "tqdm",
+    "folium>=0.20.0",
+    "branca>=0.8.2",
+    "mapclassify>=2.10.0",
+    "contextily>=1.6.0",  # OpenStreetMap basemap for figures/figure_germany_map.py
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+coupled-energy-ts = "coupled_energy_ts.cli:main"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage      = "https://github.com/TUM-Doepfert/coupled-energy-ts"
+Repository    = "https://github.com/TUM-Doepfert/coupled-energy-ts"
+"Bug Tracker" = "https://github.com/TUM-Doepfert/coupled-energy-ts/issues"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.setuptools]
+packages = ["coupled_energy_ts", "coupled_energy_ts.providers"]
+
+[tool.setuptools.package-dir]
+coupled_energy_ts             = "src"
+"coupled_energy_ts.providers" = "src/providers"
+
+[tool.pytest.ini_options]
+minversion = "8"
+testpaths = ["tests"]
+addopts = "-ra"
