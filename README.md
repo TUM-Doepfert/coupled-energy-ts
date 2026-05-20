@@ -31,6 +31,19 @@ The four input families (`ArchetypeProvider`, `ElectricityProvider`, `OccupancyP
 
 See `src/providers/` for provider implementations and schema definitions, and `config/germany_2010.yml` for a complete worked configuration.
 
+## Repository layout
+
+```
+config/germany_2010.yml   reference run specification
+src/                      pipeline core (providers, config, thermal models, simulation, CLI)
+examples/                 end-to-end usage examples (reproduce paper, BYO country)
+figures/                  paper Figs 2, 3, 4 renderers
+scripts/                  data preprocessing (HTW Berlin PL1/PL2/PL3 → Record E)
+validation/               paper Figs 5–9 (US per-building + load diversity, DE aggregate)
+tests/                    offline + opt-in integration pytest suites
+input/                    tracked README, archetypes.csv, BKG grid; manual/auto-fetched data
+```
+
 ## Reproducing the paper figures
 
 Figures 2–4 (Methods illustrations) are produced by scripts in [`figures/`](figures/). Figures 5–9 (Technical Validation) are produced by scripts in [`validation/`](validation/) — see [`validation/README.md`](validation/README.md) for tier order and prerequisites. The US validation tier downloads ~12 GB of NREL EULP data on first run; the German validation needs the When2Heat CSV from [data.open-power-system-data.org/when2heat](https://data.open-power-system-data.org/when2heat/).
@@ -52,37 +65,19 @@ CI runs the offline suite on every push; the integration suite runs weekly.
 ## Citation
 
 ```bibtex
-@article{Doepfert2026CoupledTimeSeries,
+@article{Doepfert2026,
   title   = {Coupled time series of electricity demand, occupancy, weather, and thermal demand for residential buildings},
   author  = {Doepfert, Markus and {Escobar Viegas}, Maximiliano Fernando and Zinsmeister, Daniel and Tzscheutschler, Peter and Goebel, Christoph and Hamacher, Thomas},
   journal = {Scientific Data},
   year    = {2026},
-  doi     = {10.0000/PLACEHOLDER-PAPER-DOI}
+  doi     = {TBD}
 }
 ```
 
-The Germany 2010 reference dataset has its own DOI on Zenodo: [10.5281/zenodo.20288026](https://doi.org/10.5281/zenodo.20288026). A `CITATION.cff` is included for tooling (Zotero, GitHub "Cite this repository", etc.).
+The Germany 2010 reference dataset has its own DOI on Zenodo: [10.5281/zenodo.20288026](https://doi.org/10.5281/zenodo.20288026). A `CITATION.cff` is included.
 
 ## License
 
 - **Code**: MIT — see [`LICENSE`](LICENSE).
 - **Germany 2010 dataset (Zenodo)**: CC BY 4.0.
-- **BKG 10 km UTM grid bundled at `input/grid/`**: Datenlizenz Deutschland 2.0 (redistributable).
-- Third-party inputs (HTW Berlin profiles, Open-Meteo, NREL EULP, When2Heat) retain their original licenses; the pipeline does not redistribute them.
 
-## Repository layout
-
-```
-config/germany_2010.yml   reference run specification
-src/                      pipeline core (providers, config, thermal models, simulation, CLI)
-examples/                 end-to-end usage examples (reproduce paper, BYO country)
-figures/                  paper Figs 2, 3, 4 renderers
-scripts/                  data preprocessing (HTW Berlin PL1/PL2/PL3 → Record E)
-validation/               paper Figs 5–9 (US per-building + load diversity, DE aggregate)
-tests/                    offline + opt-in integration pytest suites
-input/                    tracked README, archetypes.csv, BKG grid; manual/auto-fetched data
-```
-
-## Environment
-
-Python 3.12 (pinned in `.python-version`), managed via [uv](https://docs.astral.sh/uv/). Dependencies pinned in `uv.lock`. The thermal-simulation core uses [EnTiSe](https://github.com/TUM-Doepfert/entise) (by the same author).
