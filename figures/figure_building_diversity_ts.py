@@ -99,7 +99,10 @@ def load_all_profiles(
     weather_dir: Path,
     location_id: int,
     archetype_id: int,
-) -> tuple[pd.Series, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.Series, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Load per-profile heating and cooling series, plus the sensible-only
+    cooling series so the panel can overlay the pre-latent line under the
+    total (sensible + latent) line."""
     hc_path = output_dir / "HC" / f"loc{location_id:04d}" / f"hc_arch{archetype_id:02d}.parquet"
     w_path = weather_dir / f"loc{location_id:04d}.parquet"
     for p in (hc_path, w_path):
@@ -108,6 +111,7 @@ def load_all_profiles(
 
     hc = pd.read_parquet(hc_path)
     hc["timestamp"] = pd.to_datetime(hc["timestamp"], utc=True)
+    have_sensible = "q_cool_sensible_w" in hc.columns
 
     w = pd.read_parquet(w_path)
     w["timestamp"] = pd.to_datetime(w["timestamp"], utc=True)
@@ -120,9 +124,18 @@ def load_all_profiles(
     q_cool = (hc.pivot_table(index="timestamp", columns="profile_id",
                               values="q_cool_w", aggfunc="mean")
                 .sort_index() / 1000.0)
+    if have_sensible:
+        q_cool_sens = (hc.pivot_table(index="timestamp", columns="profile_id",
+                                        values="q_cool_sensible_w", aggfunc="mean")
+                        .sort_index() / 1000.0)
+    else:
+        # Backward-compat: old 4-column HC parquets. Sensible == total.
+        q_cool_sens = q_cool.copy()
     q_heat = q_heat.reindex(target, method="nearest", tolerance=pd.Timedelta("30min"))
     q_cool = q_cool.reindex(target, method="nearest", tolerance=pd.Timedelta("30min"))
-    return t_out, q_heat, q_cool
+    q_cool_sens = q_cool_sens.reindex(target, method="nearest",
+                                       tolerance=pd.Timedelta("30min"))
+    return t_out, q_heat, q_cool, q_cool_sens
 
 
 def pick_extreme_weeks(t_out: pd.Series) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -176,7 +189,8 @@ def pick_high_spread_weeks(
 
 
 def render_panel(ax, q_slice: pd.DataFrame, t_out_slice: pd.Series,
-                  *, mode: str) -> None:
+                  *, mode: str,
+                  q_slice_sens: pd.DataFrame | None = None) -> None:
     idx = q_slice.index
     if mode == "heating":
         line_color, median_color = "#c0392b", "#7b241c"
@@ -190,7 +204,16 @@ def render_panel(ax, q_slice: pd.DataFrame, t_out_slice: pd.Series,
 
     # Median as a single thick line
     ax.plot(idx, q_slice.median(axis=1).values,
-            color=median_color, lw=2.2)
+            color=median_color, lw=2.2,
+            label="Total (sensible + latent)" if mode == "cooling" and q_slice_sens is not None else None)
+
+    # Cooling only: overlay the sensible-only median dashed so the gap
+    # to the total median is the latent contribution.
+    if mode == "cooling" and q_slice_sens is not None:
+        ax.plot(idx, q_slice_sens.median(axis=1).values,
+                color=median_color, lw=1.8, ls="--",
+                label="Sensible only")
+        ax.legend(loc="upper left", framealpha=0.85)
 
     ax.set_ylim(bottom=0)
     ax.set_ylabel(("Q$_{heat}$" if mode == "heating" else "Q$_{cool}$") + " [kW]")
@@ -208,7 +231,8 @@ def render_panel(ax, q_slice: pd.DataFrame, t_out_slice: pd.Series,
 
 
 def render(t_out: pd.Series, q_heat: pd.DataFrame, q_cool: pd.DataFrame,
-           out_path: Path, location_id: int, archetype_id: int) -> None:
+           out_path: Path, location_id: int, archetype_id: int,
+           q_cool_sens: pd.DataFrame | None = None) -> None:
     heat_start, cool_start = pick_high_spread_weeks(q_heat, q_cool)
     winter_start = heat_start
     summer_start = cool_start
@@ -225,7 +249,9 @@ def render(t_out: pd.Series, q_heat: pd.DataFrame, q_cool: pd.DataFrame,
     render_panel(ax_s,
                   q_cool.loc[summer_start:summer_end],
                   t_out.loc[summer_start:summer_end],
-                  mode="cooling")
+                  mode="cooling",
+                  q_slice_sens=(q_cool_sens.loc[summer_start:summer_end]
+                                if q_cool_sens is not None else None))
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     # Save both PNG (raster, for README / preview) and PDF (vector,
@@ -266,10 +292,11 @@ def main():
     else:
         loc = args.location_id
 
-    t_out, q_heat, q_cool = load_all_profiles(
+    t_out, q_heat, q_cool, q_cool_sens = load_all_profiles(
         args.output_dir, args.weather_dir, loc, args.archetype_id
     )
-    render(t_out, q_heat, q_cool, args.out_fig, loc, args.archetype_id)
+    render(t_out, q_heat, q_cool, args.out_fig, loc, args.archetype_id,
+           q_cool_sens=q_cool_sens)
 
 
 if __name__ == "__main__":

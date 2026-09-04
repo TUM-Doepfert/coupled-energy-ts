@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "entise>=1.2.0,<1.3.0",  # pinned: R7C2 H_ve workaround in simulation.py is fragile to upstream changes
+    "entise==1.3.0", # pinned: R7C2 H_ve workaround in simulation.py is fragile to upstream changes
     "geopandas",
     "joblib",
     "matplotlib",
@@ -37,7 +37,7 @@ dependencies = [
     "folium>=0.20.0",
     "branca>=0.8.2",
     "mapclassify>=2.10.0",
-    "contextily>=1.6.0",  # OpenStreetMap basemap for figures/figure_germany_map.py
+    "contextily>=1.6.0", # OpenStreetMap basemap for figures/figure_germany_map.py
 ]
 
 [project.optional-dependencies]

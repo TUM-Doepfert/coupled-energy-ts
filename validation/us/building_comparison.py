@@ -143,6 +143,25 @@ def main():
                           "energy_real_kwh","energy_sim_kwh",
                           "peak_real_w","peak_sim_w"]],
                       on="bldg_id", suffixes=("_heat","_cool"))
+
+        # Diagnostic: sim-side sensible/latent split (only present when
+        # simulate_building emitted the new columns). Aggregates to a
+        # per-building annual latent share so the humid-zone effect of
+        # the latent post-pass is directly reportable in the per-zone
+        # table.
+        if "q_cool_sensible_w_sim" in sim_df.columns and "q_cool_latent_w_sim" in sim_df.columns:
+            split = (
+                sim_df.groupby("bldg_id")
+                      .agg(sim_cool_sens_kwh=("q_cool_sensible_w_sim",
+                                              lambda x: x.sum() * 0.25 / 1000.0),
+                           sim_cool_lat_kwh=("q_cool_latent_w_sim",
+                                             lambda x: x.sum() * 0.25 / 1000.0))
+                      .reset_index()
+            )
+            split["sim_cool_total_kwh"] = split["sim_cool_sens_kwh"] + split["sim_cool_lat_kwh"]
+            split["latent_share_sim"] = split["sim_cool_lat_kwh"] / split["sim_cool_total_kwh"].where(
+                split["sim_cool_total_kwh"] > 0, np.nan)
+            m = m.merge(split, on="bldg_id", how="left")
         if meta is not None:
             m = m.merge(meta, on="bldg_id", how="left")
         else:
@@ -269,7 +288,7 @@ def main():
         df_c = df[~df["low_signal_cool"]]
         n_dropped_c = df.groupby("zone").apply(
             lambda g: int(g["low_signal_cool"].sum()))
-        agg_c = df_c.groupby("zone").agg(
+        agg_kwargs = dict(
             n_used=("bldg_id","count"),
             cool_r_med=("r_q_cool_w","median"),
             cool_rmse_med_kw=("rmse_q_cool_w", lambda x: x.median()/1000),
@@ -280,7 +299,10 @@ def main():
             cool_outliers=(
                 "cool_ratio", lambda x: int((x > args.outlier_ratio).sum())
             ),
-        ).round(2)
+        )
+        if "latent_share_sim" in df_c.columns:
+            agg_kwargs["latent_share_sim_med"] = ("latent_share_sim", "median")
+        agg_c = df_c.groupby("zone").agg(**agg_kwargs).round(2)
         agg_c["n_dropped_lowsig"] = n_dropped_c
         print(agg_c.to_string())
 

@@ -18,8 +18,14 @@ from pathlib import Path
 
 import pandas as pd
 
-# Expected schema
-EXPECTED_COLUMNS = ["timestamp", "profile_id", "q_heat_w", "q_cool_w"]
+# Expected schema. ``q_cool_w`` is the total cooling load; the two split
+# columns break it into the sensible (dry-bulb) and latent (dehumidification)
+# contributions so consumers can size sensible-only or latent-only coils.
+EXPECTED_COLUMNS = [
+    "timestamp", "profile_id",
+    "q_heat_w", "q_cool_w",
+    "q_cool_sensible_w", "q_cool_latent_w",
+]
 # Derive the expected profile_id set from E.parquet at runtime so the
 # script generalises to any country instantiation, not just Germany 2010.
 EXPECTED_PROFILE_IDS: set[int] | None = None  # populated by _expected_profile_ids()
@@ -94,10 +100,23 @@ def validate_file(path: Path, verbose: bool = False) -> tuple[int, int]:
     # 4. Non-negative values
     ok_heat = (df["q_heat_w"] >= 0).all()
     ok_cool = (df["q_cool_w"] >= 0).all()
+    ok_cool_sens = (df["q_cool_sensible_w"] >= 0).all()
+    ok_cool_lat = (df["q_cool_latent_w"] >= 0).all()
     record(check("q_heat_w >= 0", ok_heat,
                  f"{(df['q_heat_w'] < 0).sum()} negative rows" if not ok_heat else ""))
     record(check("q_cool_w >= 0", ok_cool,
                  f"{(df['q_cool_w'] < 0).sum()} negative rows" if not ok_cool else ""))
+    record(check("q_cool_sensible_w >= 0", ok_cool_sens,
+                 f"{(df['q_cool_sensible_w'] < 0).sum()} negative rows" if not ok_cool_sens else ""))
+    record(check("q_cool_latent_w >= 0", ok_cool_lat,
+                 f"{(df['q_cool_latent_w'] < 0).sum()} negative rows" if not ok_cool_lat else ""))
+
+    # 4b. Sensible + latent invariant. EnTiSe rounds each sub-load to int
+    # before summing, so per-row equality is exact.
+    split_sum = df["q_cool_sensible_w"] + df["q_cool_latent_w"]
+    ok_split = (df["q_cool_w"] == split_sum).all()
+    record(check("q_cool_w == q_cool_sensible_w + q_cool_latent_w", ok_split,
+                 f"{(df['q_cool_w'] != split_sum).sum()} mismatched rows" if not ok_split else ""))
 
     # 5. Mutual exclusion. Under R1C1 with a single fixed setpoint pair,
     # heating and cooling cannot be simultaneously positive at any hour.

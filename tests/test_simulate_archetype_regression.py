@@ -94,18 +94,32 @@ def test_simulate_archetype_24h_regression(model_name: str, tmp_path):
 
     # ── Assertions ───────────────────────────────────────────────────────────
     # 1. Schema
-    assert set(out.columns) == {"timestamp", "profile_id", "q_heat_w", "q_cool_w"}
+    assert set(out.columns) == {
+        "timestamp", "profile_id",
+        "q_heat_w", "q_cool_w",
+        "q_cool_sensible_w", "q_cool_latent_w",
+    }
     assert len(out) == 24
 
     # 2. No negative loads
     assert (out["q_heat_w"] >= 0).all(), "negative heating values"
     assert (out["q_cool_w"] >= 0).all(), "negative cooling values"
+    assert (out["q_cool_sensible_w"] >= 0).all(), "negative sensible cooling"
+    assert (out["q_cool_latent_w"] >= 0).all(), "negative latent cooling"
 
     # 3. Cold day → some heating happens, no cooling
     daily_heat_kwh = out["q_heat_w"].sum() / 1000.0   # 1h timesteps, Wh -> kWh
     daily_cool_kwh = out["q_cool_w"].sum() / 1000.0
     assert daily_heat_kwh > 0.0, "no heating on a 0 °C day with full occupancy"
     assert daily_cool_kwh < 1.0, f"unexpected cooling: {daily_cool_kwh:.2f} kWh"
+
+    # 4. Sensible + latent invariant (per row). This fixture omits
+    # relative_humidity[1] and surface_air_pressure[Pa] on purpose, so
+    # latent should be zero everywhere and total should equal sensible.
+    assert (out["q_cool_latent_w"] == 0).all(), (
+        "latent cooling should be 0 without RH/pressure inputs"
+    )
+    assert (out["q_cool_w"] == out["q_cool_sensible_w"]).all()
 
 
 def test_simulate_archetype_signature():

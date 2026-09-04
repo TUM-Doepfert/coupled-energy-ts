@@ -170,6 +170,7 @@ class WeatherSchema:
         diffuse_horizontal_irradiance   float [W/m²]
         wind_speed                      float [m/s]
         relative_humidity               float [%]
+        surface_air_pressure            float [Pa]
 
     DNI and DHI are required because the thermal simulation needs the
     beam/diffuse split to compute window solar gains correctly. A
@@ -179,6 +180,14 @@ class WeatherSchema:
     established model (Erbs, DISC, Boland) before constructing the
     canonical parquet.
 
+    ``relative_humidity`` and ``surface_air_pressure`` feed EnTiSe's
+    latent-cooling post-pass (ventilation-driven dehumidification load).
+    Without them the sensible cooling is still computed correctly, but
+    ~30–50 % of the summer cooling demand is silently omitted in humid
+    climates. They are kept in the storage units above (% and Pa) and
+    converted to EnTiSe's canonical units (fraction, Pa) at simulation
+    time in ``simulation._rename_weather_columns``.
+
     Location centroids (lat/lon) live in a separate location-mapping CSV
     referenced by the WeatherProvider; pipeline keeps geometry separate
     from time series for storage efficiency.
@@ -187,7 +196,7 @@ class WeatherSchema:
         "timestamp", "location_id", "air_temperature",
         "global_horizontal_irradiance",
         "direct_normal_irradiance", "diffuse_horizontal_irradiance",
-        "wind_speed", "relative_humidity",
+        "wind_speed", "relative_humidity", "surface_air_pressure",
     )
 
 

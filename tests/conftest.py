@@ -170,6 +170,7 @@ def weather_setup(tmp_path: Path, hourly_index: pd.DatetimeIndex) -> dict[str, P
             "diffuse_horizontal_irradiance": 0.3 * ghi,
             "wind_speed": rng.uniform(1.0, 5.0, n),
             "relative_humidity": rng.uniform(40.0, 90.0, n),
+            "surface_air_pressure": rng.uniform(99_000.0, 103_000.0, n),
         })
         df.to_parquet(cache_dir / f"loc{loc_id:04d}.parquet", index=False)
 

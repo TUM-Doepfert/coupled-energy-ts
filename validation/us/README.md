@@ -230,12 +230,44 @@ glazing if parsed total > 50 % of floor area.
   EER 10.7" → 10.7 / 3.412 = 3.14 W/W; default 3.0 W/W). Temperature
   correction: `EER(T) = EER_rated × max(0.5, 1 − 0.0085 × (T − 35 °C))`.
 
-### Cooling — known structural limitation
-The 1R1C method is **sensible-only**: it does not model latent cooling
-(humidity removal). EULP cooling-electric includes both sensible and
-latent, the latter dominating in humid climates. Our sim under-predicts
-cooling intensity by ~50 % in Hot-Humid AL and Hot-Dry TX. This is a
-structural limit of lumped-capacitance methods, not a bug.
+### Cooling — sensible + latent (EnTiSe 1.2.1+)
+The 1R1C solver is sensible-only, but EnTiSe 1.2.1+ ships a
+**latent-cooling post-pass** (issue #103) that runs after the sensible
+solver and computes the humidity-removal load from outdoor RH and
+surface pressure via psychrometrics (ASHRAE Handbook of Fundamentals,
+Ch. 1). It is fully decoupled from the T\_in dynamics — 1R1C carries no
+humidity state — so it leaves the solver kernel untouched and matches
+EULP's cooling-electric semantics (sensible + latent).
+
+The US weather loader in `building_simulate.py` maps the EULP AMY 2018
+columns to what the post-pass expects:
+
+- `Relative Humidity [%]` → `relative_humidity[1]` (fraction, /100)
+- `surface_air_pressure[Pa]` → **per-county** ISA standard atmosphere
+  from `COUNTY_ELEVATION_M` in `COUNTIES.py`. EULP AMY 2018 does not
+  ship surface pressure and NREL's other files carry only lat/lon
+  (no elevation); rather than fuse in a foreign weather source, we
+  hardcode county elevations from USGS county-seat values and apply
+  the barometric formula. Elevation uncertainty is ~50 m, translating
+  to ~0.6 % on ω — negligible against the latent load itself.
+
+`simulate_building()` now emits three cooling columns per timestep in
+the `data/sim/<county>_<zone>.parquet` files:
+
+- `q_cool_w_sim`          — total cooling (sensible + latent), the
+  apples-to-apples counterpart to EULP's `q_cool_w`
+- `q_cool_sensible_w_sim` — sensible portion (the pre-1.2.1 number)
+- `q_cool_latent_w_sim`   — latent portion (0 when the coil is off)
+
+`building_comparison.py` picks up the split when present and reports
+per-building `latent_share_sim` plus a per-zone median in the cooling
+diagnostic table. `timeseries_comparison.py` and
+`diversity_comparison.py` use the total in `q_cool_w_sim` directly.
+
+Prior state (pre-1.2.1, sensible-only): systematic ~50 % cooling
+under-prediction in Hot-Humid AL and ~50 % in Hot-Dry TX. Post-fix
+numbers land in the refreshed metrics table below after the pipeline is
+rerun with the updated `building_simulate.py`.
 
 ---
 
@@ -256,13 +288,15 @@ The full sample is 573 qualified SFH; reports use these transparent filters:
 
 ## Headline validation findings
 
-> The metrics below are from an earlier run. They will be refreshed after
-> the regeneration with the new internal-gain (80 W/person), comfort-bound
-> alignment (EN 16798-1 Cat II), window-area schema, and consolidated
-> `src/ach.py` rule. Use `data/building_comparison_metrics.csv` as the
-> authoritative source after the rerun.
+> The metrics below are from an earlier run **without** the
+> latent-cooling post-pass. They will be refreshed after the
+> regeneration with EnTiSe 1.2.1+ (latent post-pass on) plus the new
+> internal-gain (80 W/person), comfort-bound alignment (EN 16798-1
+> Cat II), window-area schema, and consolidated `src/ach.py` rule.
+> Use `data/building_comparison_metrics.csv` as the authoritative
+> source after the rerun.
 
-After all filters, on the six climate zones:
+Pre-latent (sensible-only), on the six climate zones:
 
 | Zone        | n_used (heat / cool) | Heat r | Heat sim/real | Cool r | Cool sim/real |
 |-------------|----------------------|--------|---------------|--------|---------------|
@@ -274,10 +308,21 @@ After all filters, on the six climate zones:
 | Very Cold   |   72 / 62            | 0.94   | 1.15          | 0.71   | 1.04          |
 
 - **Heating** captured well: r 0.69–0.94 across zones; intensity within
-  ~30 % of EULP everywhere.
-- **Cooling** temporally captured (r 0.71–0.86 outside Marine) but
-  systematically under-predicted in magnitude by ~50 %, traced to the
-  absence of latent cooling in 1R1C.
+  ~30 % of EULP everywhere. Not affected by the latent-cooling change.
+- **Cooling (pre-latent)** temporally captured (r 0.71–0.86 outside
+  Marine) but systematically under-predicted in magnitude by ~50 %,
+  traced to the absence of latent cooling in 1R1C.
+- **Cooling (post-latent)** — expected to close most of the humid-zone
+  gap. Rough zone-by-zone expectations, to be replaced by the actual
+  rerun numbers once the pipeline reruns end-to-end:
+  - Hot-Humid AL: latent share ~30–45 % → `Cool sim/real` moves from
+    0.50 into the 0.75–0.95 band.
+  - Mixed-Humid IN: latent share ~15–30 % → 0.61 → ~0.75–0.90.
+  - Hot-Dry TX: latent share ~5–15 % → 0.56 → ~0.60–0.70 (arid, so
+    the fix helps least here — the residual gap is mostly envelope).
+  - Cold MI / Very Cold ND: near-zero latent → essentially unchanged.
+  - Marine WA: still low-signal; the low ratio is a scaling effect
+    on tiny loads, not a magnitude problem.
 - **Marine cooling** has very low real signal (median 16 kWh/m²·yr); 39
   of 97 buildings are excluded as low-signal, leaving 58. Remaining
   correlation is weak but the absolute errors are tiny.
@@ -298,8 +343,12 @@ After all filters, on the six climate zones:
 
 ## Known limitations
 
-1. **Sensible-only cooling.** 1R1C cannot model latent cooling; cooling
-   intensity in humid climates is systematically under-predicted by ~50 %.
+1. **Latent-cooling post-pass, not a coil model.** EnTiSe 1.2.1+ closes
+   the humid-zone under-prediction by post-computing the dehumidification
+   load from outdoor RH and setpoint-target humidity ratio, sensible-
+   priority under the total cap. Bypass factor is 0 (perfect coil) and
+   ω_target uses ASHRAE-55 mid-comfort-band 50 % RH — a coil-detail
+   model with a configurable BPF is a follow-up (EnTiSe issue #104).
 2. **German envelope archetypes for US buildings.** TABULA-DE fits give
    reasonable order-of-magnitude R, C but introduce ~10–25 % systematic
    over-prediction of heating intensity.

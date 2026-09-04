@@ -43,6 +43,8 @@ from entise.methods.auxiliary.internal.selector import InternalGains
 from entise.methods.auxiliary.solar.selector import SolarGains
 from entise.methods.auxiliary.ventilation.selector import Ventilation
 from entise.methods.hvac import R1C1
+from entise.methods.hvac._latent_cooling import compute_latent_cooling
+from entise.methods.hvac.defaults import DEFAULT_TARGET_HUMIDITY_REL
 from teaser.project import Project
 
 from eulp_to_sim import (
@@ -51,7 +53,7 @@ from eulp_to_sim import (
     build_ventilation_series,
     map_metadata_row,
 )
-from COUNTIES import COUNTIES
+from COUNTIES import COUNTIES, COUNTY_ELEVATION_M, pressure_from_elevation
 
 # ── Constants ─────────────────────────────────────────────────────────────
 GAINS_PER_PERSON_W = 80        # match src.simulation (EN 16798-1 / ISO 17772-1 sedentary residential)
@@ -105,18 +107,34 @@ def fit_teaser_one(year: int, area_m2: float, n_floors: int,
         return None
 
 
-def load_weather(weather_csv: Path) -> pd.DataFrame:
+def load_weather(weather_csv: Path,
+                 pressure_pa: float = 101_325.0) -> pd.DataFrame:
     """Load EULP county weather CSV (hourly), interpolate to 15-min, and
-    return DataFrame with tz-aware UTC `datetime` column plus the radiation
-    components EnTiSe expects."""
+    return DataFrame with tz-aware UTC ``datetime`` column plus the
+    radiation components EnTiSe expects.
+
+    Also emits ``relative_humidity[1]`` (fractional; EULP stores %) and
+    ``surface_air_pressure[Pa]`` so EnTiSe's latent-cooling post-pass
+    (issue #103) can compute ω_out and ω_target. The EULP AMY 2018
+    weather CSV does NOT carry pressure; the caller passes a per-county
+    constant derived from elevation via the ISA standard atmosphere.
+    See ``COUNTIES.pressure_from_elevation``. Sea level (101 325 Pa) is
+    the default only so the function stays useful in scripts that don't
+    thread county context through — the reference validation runs
+    always pass the county-specific value.
+    """
     w = pd.read_csv(weather_csv)
     ts = pd.to_datetime(w["date_time"]) - pd.Timedelta(hours=1)
+    # EULP RH is in percent; EnTiSe expects a [0, 1] fraction.
+    rh_frac = pd.to_numeric(w["Relative Humidity [%]"], errors="coerce") / 100.0
     hourly = pd.DataFrame({
         "datetime": ts,  # tz-naive for now; localized after interpolation
         "air_temperature[C]": pd.to_numeric(w["Dry Bulb Temperature [°C]"]).astype(float),
         "global_horizontal_irradiance[W m-2]": pd.to_numeric(w["Global Horizontal Radiation [W/m2]"]),
         "direct_normal_irradiance[W m-2]": pd.to_numeric(w["Direct Normal Radiation [W/m2]"]),
         "diffuse_horizontal_irradiance[W m-2]": pd.to_numeric(w["Diffuse Horizontal Radiation [W/m2]"]),
+        "relative_humidity[1]": rh_frac.astype(float),
+        "surface_air_pressure[Pa]": float(pressure_pa),
     }).set_index("datetime").sort_index()
     full_15 = pd.date_range(hourly.index.min(),
                             hourly.index.max() + pd.Timedelta(minutes=45),
@@ -271,11 +289,45 @@ def _run_with_setpoint_arrays(
         P_h_max, P_c_max, on_h, on_c, timestep_s,
     )
 
+    # Latent-cooling post-pass — mirrors R1C1.generate() (EnTiSe issue
+    # #103) but applied to this setpoint-array kernel. ``p_cool`` from
+    # the sensible solver is already clipped to ``P_c_max``; when the
+    # total (sensible + latent) exceeds the cap, ``compute_latent_cooling``
+    # keeps sensible first and clips latent to the remainder. Zero
+    # latent when ``active_cooling=False`` or when RH/pressure are
+    # missing from the weather DataFrame (graceful degradation).
+    if on_c:
+        gains_lat = np.zeros_like(p_cool)
+        # Cooling setpoint is per-timestep here; feed the array so
+        # ω_target tracks the setpoint schedule (matters when EULP
+        # setup schedules push T_cool above the constant setpoint).
+        p_cool_sensible, p_cool_latent = compute_latent_cooling(
+            weather=weather,
+            p_cool_sensible=p_cool,
+            p_cool_max=np.full_like(p_cool, P_c_max),
+            h_ve=vent,
+            gains_internal_latent=gains_lat,
+            temp_max_c=t_cool_arr,
+            target_humidity_rel=DEFAULT_TARGET_HUMIDITY_REL,
+        )
+    else:
+        p_cool_sensible = p_cool
+        p_cool_latent = np.zeros_like(p_cool)
+
+    # Round sensible + latent first, then derive total as their sum so
+    # the per-row invariant ``total == sensible + latent`` holds exactly
+    # — matches how R1C1/R5C1/R7C2 emit the same columns.
+    p_sens_int = p_cool_sensible.round().astype(int)
+    p_lat_int = p_cool_latent.round().astype(int)
+    p_total_int = p_sens_int + p_lat_int
+
     df = pd.DataFrame(
         {
             Columns.TEMP_IN: temp_in.round(3),
             f"{Types.HEATING}{SEP}{Columns.LOAD}[W]": p_heat.round().astype(int),
-            f"{Types.COOLING}{SEP}{Columns.LOAD}[W]": p_cool.round().astype(int),
+            f"{Types.COOLING}{SEP}{Columns.LOAD}[W]": p_total_int,
+            f"{Types.COOLING}{SEP}sensible_{Columns.LOAD}[W]": p_sens_int,
+            f"{Types.COOLING}{SEP}latent_{Columns.LOAD}[W]": p_lat_int,
         },
         index=weather.index,
     )
@@ -400,11 +452,17 @@ def simulate_building(
 
     ts = _run_with_setpoint_arrays(obj, data, t_heat_arr, t_cool_arr)
 
+    # ``q_cool_w_sim`` = sensible + latent (matches EnTiSe's
+    # ``cooling:load[W]`` semantics; matches NREL's cooling electricity
+    # which also includes dehumidification). The split is emitted alongside
+    # so downstream comparisons can slice.
     return pd.DataFrame({
         "timestamp": ts.index,
         "bldg_id": sim_inputs.bldg_id,
         "q_heat_w_sim": ts[f"{Types.HEATING}{SEP}{Columns.LOAD}[W]"].astype(np.float32),
         "q_cool_w_sim": ts[f"{Types.COOLING}{SEP}{Columns.LOAD}[W]"].astype(np.float32),
+        "q_cool_sensible_w_sim": ts[f"{Types.COOLING}{SEP}sensible_{Columns.LOAD}[W]"].astype(np.float32),
+        "q_cool_latent_w_sim": ts[f"{Types.COOLING}{SEP}latent_{Columns.LOAD}[W]"].astype(np.float32),
     })
 
 
@@ -460,7 +518,19 @@ def process_county(county_id: str, zone: str, data_dir: Path,
     print(f"\n[{county_id} {zone}] {len(md_full)} buildings to simulate "
           f"(setpoint schedules: {schedule_label})")
 
-    weather_df = load_weather(weather_csv)
+    # Per-county surface pressure from ISA standard atmosphere; drives
+    # EnTiSe's latent-cooling post-pass. Falls back to sea level when the
+    # county isn't in the lookup — flagged so users notice.
+    elevation_m = COUNTY_ELEVATION_M.get(county_id)
+    if elevation_m is None:
+        print(f"  [warn] no elevation for {county_id}; using sea-level pressure")
+        pressure_pa = 101_325.0
+    else:
+        pressure_pa = pressure_from_elevation(elevation_m)
+    print(f"  elevation {elevation_m or 0:.0f} m -> "
+          f"surface pressure {pressure_pa/1000:.2f} kPa")
+
+    weather_df = load_weather(weather_csv, pressure_pa=pressure_pa)
     nrel_proc = pd.read_parquet(proc_pq)
 
     out_rows = []

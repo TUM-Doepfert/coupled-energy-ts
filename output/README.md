@@ -8,11 +8,42 @@ This folder contains generated records for the coupled 2010 electricity, occupan
 | --- |-------------------------------------------------------------| --- |
 | E | `E.parquet`                                                 | `timestamp`, `profile_id`, `electricity_demand` |
 | O | `O.parquet`                                                 | `timestamp`, `profile_id`, `occupied` |
-| W | `W/loc{location_id:04d}.parquet`                            | `timestamp`, `air_temperature`, `relative_humidity`, `global_horizontal_irradiance`, `direct_normal_irradiance`, `diffuse_horizontal_irradiance`, `wind_speed` |
-| B | `B.parquet`                                                 | `archetype_id`, `construction_year`, `area_m2`, `n_floors`, `height_floor_m`, `thermal_resistance`, `thermal_capacitance`, `window_area_total_m2` |
-| H/C | `HC/loc{location_id:04d}/hc_arch{archetype_id:02d}.parquet` | `timestamp`, `profile_id`, `q_heat_w`, `q_cool_w` |
+| W | `W/loc{location_id:04d}.parquet`                            | `timestamp`, `location_id`, `air_temperature`, `global_horizontal_irradiance`, `direct_normal_irradiance`, `diffuse_horizontal_irradiance`, `wind_speed`, `relative_humidity`, `surface_air_pressure` |
+| B | `B.parquet`                                                 | `archetype_id`, `construction_year`, `area_m2`, `n_floors`, `height_floor_m`, `thermal_resistance`, `thermal_capacitance`, `window_area_total_m2`, plus the higher-order thermal parameters listed below |
+| H/C | `HC/loc{location_id:04d}/hc_arch{archetype_id:02d}.parquet` | `timestamp`, `profile_id`, `q_heat_w`, `q_cool_w`, `q_cool_sensible_w`, `q_cool_latent_w` |
 
-For records W and H/C, `location_id` (and `archetype_id` for H/C) are encoded in the filename rather than as columns inside the file.
+Records W and H/C are distributed as the archives `W.zip` and `HC.zip`, which unpack to the
+directory trees `W/` and `HC/` shown above. W contains 4,045 files, one per location. H/C
+contains 44,495 files, one per (location, archetype) pair, each holding all 74 profile
+realizations. The remaining records are single files at the top level.
+
+For record H/C, `location_id` and `archetype_id` are encoded in the path rather than repeated
+as columns inside the file, so a reader concatenating several files must recover them from the
+filename. Record W encodes `location_id` in the filename as well but additionally carries it as
+a redundant column.
+
+In record H/C, `q_cool_w` equals `q_cool_sensible_w` plus `q_cool_latent_w` at every time step.
+Users interested only in total cooling can ignore the split; users comparing against a
+sensible-only model can use `q_cool_sensible_w` directly.
+
+## Record B: higher-order thermal parameters
+
+`B.parquet` carries the reduced-order parameters of all three thermal-network models the
+pipeline supports. The 1R1C model used for the published run reads `thermal_resistance` and
+`thermal_capacitance`. The following columns are read only when the ISO 13790 5R1C or the
+VDI 6007 7R2C model is selected in the configuration. All are derived from the same TEASER
+export of the TABULA archetype, so switching thermal model does not require regenerating B.
+
+| Column | Model | Unit |
+| --- | --- | --- |
+| `H_tr_is`, `H_tr_ms`, `H_tr_w`, `H_tr_em` | 5R1C | W/K |
+| `C_m` | 5R1C | J/K |
+| `R_1_AW`, `R_1_IW` | 7R2C | K/W |
+| `C_1_AW`, `C_1_IW` | 7R2C | J/K |
+| `R_alpha_star_AW`, `R_alpha_star_IW`, `R_alpha_star_IL`, `R_rest_AW` | 7R2C | K/W |
+
+`area_m2` is the TABULA energy reference area, which for all TABULA-DE single-family-house
+classes is exactly 1.10 times the heated living area reported alongside it in the typology.
 
 ## Identifiers
 

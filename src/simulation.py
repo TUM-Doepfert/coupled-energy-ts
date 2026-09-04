@@ -21,7 +21,20 @@ from .thermal_models import (
 from .weather import interpolate_weather_15min
 
 # ── Output schema ──────────────────────────────────────────────────────────────
-HC_COLUMNS = ["timestamp", "profile_id", "q_heat_w", "q_cool_w"]
+#
+# ``q_cool_w`` is the TOTAL cooling load (sensible + latent). EnTiSe's
+# latent-cooling post-pass computes dehumidification load from outdoor
+# humidity via the ventilation air mass flow — non-zero only when both
+# ``relative_humidity`` and ``surface_air_pressure`` are present on the
+# weather DataFrame (see ``_rename_weather_columns``). The two sub-loads
+# are exposed alongside so dataset consumers can size sensible-only or
+# latent-only coils without re-running the simulation. Invariant:
+# ``q_cool_w == q_cool_sensible_w + q_cool_latent_w``, per-row.
+HC_COLUMNS = [
+    "timestamp", "profile_id",
+    "q_heat_w", "q_cool_w",
+    "q_cool_sensible_w", "q_cool_latent_w",
+]
 HC_PARQUET_COMPRESSION = "zstd"
 HC_PARQUET_COMPRESSION_LEVEL = 9
 
@@ -89,17 +102,28 @@ def _rename_weather_columns(df: pd.DataFrame) -> pd.DataFrame:
     No GHI-only fallback — collapsing all radiation to diffuse would
     systematically suppress beam window gains on clear winter days and
     inflate heating demand.
+
+    Relative humidity and surface pressure feed EnTiSe's latent-cooling
+    post-pass (ventilation-driven dehumidification, ~30–50 % of summer
+    cooling demand in humid climates). The canonical parquet stores RH in
+    percent and pressure in Pa; EnTiSe expects RH as a 0–1 fraction
+    (``relative_humidity[1]``) and pressure in Pa
+    (``surface_air_pressure[Pa]``), so RH is divided by 100 here.
+    ``wind_speed`` is intentionally dropped — R1C1/R5C1/R7C2 do not use
+    it, and passing it inflates the data bundle without effect.
     """
-    out = (
-        df.drop(columns=["location_id", "wind_speed", "relative_humidity"], errors="ignore")
-        .rename(columns={
-            "timestamp": "datetime",
-            "air_temperature": "air_temperature[C]",
-            "global_horizontal_irradiance": "global_horizontal_irradiance[W m-2]",
-            "direct_normal_irradiance": "direct_normal_irradiance[W m-2]",
-            "diffuse_horizontal_irradiance": "diffuse_horizontal_irradiance[W m-2]",
-        })
-    )
+    keep = df.drop(columns=["location_id", "wind_speed"], errors="ignore")
+    out = keep.rename(columns={
+        "timestamp": "datetime",
+        "air_temperature": "air_temperature[C]",
+        "global_horizontal_irradiance": "global_horizontal_irradiance[W m-2]",
+        "direct_normal_irradiance": "direct_normal_irradiance[W m-2]",
+        "diffuse_horizontal_irradiance": "diffuse_horizontal_irradiance[W m-2]",
+        "relative_humidity": "relative_humidity[1]",
+        "surface_air_pressure": "surface_air_pressure[Pa]",
+    })
+    if "relative_humidity[1]" in out.columns:
+        out["relative_humidity[1]"] = out["relative_humidity[1]"] / 100.0
     out["datetime"] = pd.to_datetime(out["datetime"]).dt.tz_convert("UTC")
     return out.reset_index(drop=True)
 
@@ -289,11 +313,16 @@ def simulate_archetype(
         hvac = hvac_gen.generate(obj, data)
         ts = hvac[Keys.TIMESERIES]
 
+        cool_col = f"{Types.COOLING}{SEP}{Columns.LOAD}[W]"
+        cool_sens_col = f"{Types.COOLING}{SEP}sensible_{Columns.LOAD}[W]"
+        cool_lat_col = f"{Types.COOLING}{SEP}latent_{Columns.LOAD}[W]"
         frames.append(pd.DataFrame({
             "timestamp": ts.index,
             "profile_id": profile_id,
             "q_heat_w": ts[f"{Types.HEATING}{SEP}{Columns.LOAD}[W]"],
-            "q_cool_w": ts[f"{Types.COOLING}{SEP}{Columns.LOAD}[W]"],
+            "q_cool_w": ts[cool_col],
+            "q_cool_sensible_w": ts[cool_sens_col],
+            "q_cool_latent_w": ts[cool_lat_col],
         }))
 
         if progress_bar is not None:

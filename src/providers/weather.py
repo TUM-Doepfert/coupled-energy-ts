@@ -74,12 +74,17 @@ class OpenMeteoWeatherProvider:
         return load_grid_locations(Path(self.grid_path))
 
     def get_weather(self, location_id: int, year: int) -> pd.DataFrame:
-        # Prefer cached parquet if present.
+        # Prefer cached parquet if present AND schema-complete. Caches
+        # written before ``surface_air_pressure`` joined the schema
+        # (needed for EnTiSe's latent-cooling post-pass) are re-fetched
+        # transparently so users don't have to nuke input/weather/ by
+        # hand.
         path = Path(self.cache_dir) / weather_filename(location_id)
         if path.exists():
             df = pd.read_parquet(path)
-            validate_schema(df, WeatherSchema.REQUIRED, str(path))
-            return df
+            missing = [c for c in WeatherSchema.REQUIRED if c not in df.columns]
+            if not missing:
+                return df
 
         # Otherwise fetch fresh and cache.
         from ..weather import Location, fetch_weather

@@ -26,6 +26,7 @@ WEATHER_COLUMNS = [
     "diffuse_horizontal_irradiance",
     "wind_speed",
     "relative_humidity",
+    "surface_air_pressure",
 ]
 WEATHER_FEATURES = [
     "temperature_2m",
@@ -34,6 +35,7 @@ WEATHER_FEATURES = [
     "direct_normal_irradiance",
     "diffuse_radiation",
     "wind_speed_10m",
+    "surface_pressure",
 ]
 WEATHER_FLOAT_COLUMNS = [
     "air_temperature",
@@ -42,6 +44,7 @@ WEATHER_FLOAT_COLUMNS = [
     "diffuse_horizontal_irradiance",
     "wind_speed",
     "relative_humidity",
+    "surface_air_pressure",
 ]
 WEATHER_PARQUET_COMPRESSION = "zstd"
 WEATHER_PARQUET_COMPRESSION_LEVEL = 9
@@ -117,6 +120,16 @@ def normalize_weather_frame(df: pd.DataFrame, location_id: int) -> pd.DataFrame:
     dhi_col = _find_column(columns, ("diffuse_horizontal_irradiance", "diffuse_radiation"))
     wind_speed_col = _find_column(columns, ("wind_speed", "wind_speed_10m"))
     humidity_col = _find_column(columns, ("relative_humidity", "relative_humidity_2m"))
+    pressure_col = _find_column(columns, ("surface_air_pressure", "surface_pressure"))
+
+    pressure = pd.to_numeric(source[pressure_col], errors="raise")
+    # Open-Meteo returns surface_pressure in hPa. The canonical schema
+    # stores it in Pa so it feeds EnTiSe's psychrometrics without a
+    # unit-conversion round-trip. Detect the scale by median magnitude:
+    # sea-level surface pressure is ~1013 hPa ≈ 101_325 Pa, so anything
+    # below 2000 is unambiguously hPa.
+    if pressure.median() < 2000.0:
+        pressure = pressure * 100.0
 
     out = pd.DataFrame(
         {
@@ -128,6 +141,7 @@ def normalize_weather_frame(df: pd.DataFrame, location_id: int) -> pd.DataFrame:
             "diffuse_horizontal_irradiance": pd.to_numeric(source[dhi_col], errors="raise"),
             "wind_speed": pd.to_numeric(source[wind_speed_col], errors="raise"),
             "relative_humidity": pd.to_numeric(source[humidity_col], errors="raise"),
+            "surface_air_pressure": pressure,
         }
     )
 
@@ -233,6 +247,22 @@ def _fetch_with_retry(
     raise RuntimeError("unreachable")
 
 
+def _parquet_has_required_columns(path: Path) -> bool:
+    """Check whether a cached weather parquet carries every required column.
+
+    Reads only the metadata (parquet schema), not the row groups — cheap
+    even for thousands of files. Used to invalidate caches written before
+    ``surface_air_pressure`` was added to the schema (issue: latent-cooling
+    post-pass needs RH + surface pressure to produce non-zero output).
+    """
+    try:
+        import pyarrow.parquet as pq
+        cols = set(pq.ParquetFile(path).schema_arrow.names)
+    except Exception:
+        return False
+    return set(WEATHER_COLUMNS).issubset(cols)
+
+
 def fetch_weather_file(
     location: Location,
     output_dir: Path,
@@ -243,7 +273,7 @@ def fetch_weather_file(
 ) -> bool:
     require_parquet_engine()
     output_path = weather_output_path(output_dir, location.location_id)
-    if output_path.exists() and not overwrite:
+    if output_path.exists() and not overwrite and _parquet_has_required_columns(output_path):
         return False
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
