@@ -3,13 +3,24 @@ timeseries with thermal heating, thermal cooling, and total electricity
 columns in W (15-min resolution).
 
 Key conversions:
-  - Fossil heating (gas, oil, propane): thermal = fuel * AFUE
-  - Electric resistance heating: thermal = electric (1:1)
-  - Heat pump heating: thermal = electric * COP(T_out)  via Ruhnau et al. 2019
-  - Cooling thermal: electric * EER (constant approx; see notes)
+  - Heating thermal: EULP's published delivered load
+    ``out.load.heating.energy_delivered.kbtu``
+  - Cooling thermal: EULP's published delivered load
+    ``out.load.cooling.energy_delivered.kbtu``
   - Electricity total: sum of all electricity end-uses, EXCLUDING heating &
     cooling electric inputs (so we have the "household" electricity you'd
     measure at the meter without HVAC).
+
+The thermal columns are taken directly from the archive rather than
+reconstructed from fuel and electricity consumption. Reconstruction requires
+an assumed combustion efficiency, a heat-pump COP curve and a
+temperature-corrected rated EER, and it misattributes any consumption on an
+HVAC end-use that does not deliver thermal energy. The clearest case is the
+crankcase heater of a central air conditioner, which draws power all winter
+and delivers no cooling: multiplying it by a rated EER produced roughly 200 W
+of phantom cooling in every central-AC building whenever the compressor was
+off. Against the published delivered load that artefact disappears, and the
+efficiency assumptions are no longer needed at all.
 
 Output: one parquet per county at <data>/processed/<county>_<zone>.parquet
         Schema: timestamp, bldg_id, electricity_w, q_heat_w, q_cool_w
@@ -140,6 +151,13 @@ HEATING_FANS_COL = "out.electricity.heating_fans_pumps.energy_consumption"
 COOLING_ELEC_COL = "out.electricity.cooling.energy_consumption"
 COOLING_FANS_COL = "out.electricity.cooling_fans_pumps.energy_consumption"
 
+# Delivered thermal load, published by EULP. These are what the thermal
+# comparison uses; the consumption columns above are retained only for the
+# household-electricity sum and for reference.
+HEATING_LOAD_COL = "out.load.heating.energy_delivered.kbtu"
+COOLING_LOAD_COL = "out.load.cooling.energy_delivered.kbtu"
+KBTU_TO_KWH = 293.071 / 1000.0   # 1 kBtu = 0.293071 kWh
+
 # Explicit 17-column "power" list (matches thesis pipeline / Columns.xlsx).
 # This is the household behavioural electricity used to drive occupancy
 # detection; intentionally excludes HVAC electric (heating/cooling),
@@ -182,10 +200,17 @@ def convert_building(
         *POWER_COLS_17,
         HEATING_ELEC_COL, HEATING_HP_BACKUP_COL, HEATING_FANS_COL,
         COOLING_ELEC_COL, COOLING_FANS_COL,
+        HEATING_LOAD_COL, COOLING_LOAD_COL,
         *HEATING_FUEL_COLS_FOSSIL,
     ]
     df = pd.read_parquet(raw_path, columns=cols)
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    # EULP labels each interval at its END (the first row of 2018 is
+    # 00:15, the last is 2019-01-01 00:00). Our weather grid and the
+    # simulation output label intervals at their START. The rows already
+    # line up positionally, so only the labels differ, but a join on
+    # timestamp would pair our [00:15, 00:30) with EULP's [00:00, 00:15).
+    # Shift to start-of-interval so the two are directly joinable.
+    df["timestamp"] = pd.to_datetime(df["timestamp"]) - pd.Timedelta(minutes=15)
 
     # Align weather to the building timestamps (15-min interpolation).
     w = weather.set_index("timestamp").reindex(
@@ -193,31 +218,11 @@ def convert_building(
     )
     t_out_c = w["air_temperature_c"].astype(np.float32).to_numpy()
 
-    # Heating thermal [kWh per 15min]
-    fossil_kwh = sum(df[c].fillna(0.0) for c in HEATING_FUEL_COLS_FOSSIL)
-    fossil_thermal_kwh = AFUE_FOSSIL * fossil_kwh
-
-    elec_heat_kwh = df[HEATING_ELEC_COL].fillna(0.0)
-    hp_backup_kwh = df[HEATING_HP_BACKUP_COL].fillna(0.0)
-
-    if _is_heat_pump(meta_row):
-        cop = hp_cop(t_out_c, DEFAULT_HP_SOURCE, DEFAULT_DISTRIBUTION)
-        # HP compressor electric * COP, plus resistance backup (1:1)
-        elec_thermal_kwh = elec_heat_kwh.to_numpy() * cop
-        elec_thermal_kwh = pd.Series(elec_thermal_kwh, index=df.index)
-        elec_thermal_kwh = elec_thermal_kwh + hp_backup_kwh
-    else:
-        # Resistance: thermal = electric (HP backup is 0 for non-HP buildings)
-        elec_thermal_kwh = elec_heat_kwh + hp_backup_kwh
-
-    q_heat_kwh = fossil_thermal_kwh + elec_thermal_kwh
-
-    # Cooling thermal [kWh per 15min]: electric input * EER(T_out)
-    # Per-building rated EER from metadata, T-corrected per timestep.
-    elec_cool_kwh = df[COOLING_ELEC_COL].fillna(0.0)
-    eer_rated = _parse_eer_w_per_w(meta_row.get("in.hvac_cooling_efficiency", ""))
-    eer_series = _eer_t_corrected(eer_rated, t_out_c)
-    q_cool_kwh = eer_series * elec_cool_kwh.to_numpy()
+    # Heating and cooling thermal [kWh per 15min], taken from EULP's
+    # published delivered load rather than reconstructed from consumption.
+    # See the module docstring for why.
+    q_heat_kwh = df[HEATING_LOAD_COL].fillna(0.0) * KBTU_TO_KWH
+    q_cool_kwh = df[COOLING_LOAD_COL].fillna(0.0) * KBTU_TO_KWH
 
     # Household electricity [kWh per 15min]: explicit sum of the 17 "power"
     # end-uses (lighting, plug loads, large appliances, ventilation, well/pool

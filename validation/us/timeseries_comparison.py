@@ -73,16 +73,6 @@ def main():
                         default=Path("validation/us/data"))
     parser.add_argument("--metrics-csv", type=Path,
                         default=Path("validation/us/data/building_comparison_metrics.csv"))
-    parser.add_argument("--inset-zone", type=str, default="Hot-Humid",
-                        help="zone panel carrying the summer zoom inset")
-    parser.add_argument("--inset-start", type=str, default="2018-04-15",
-                        help="first day of the zoom window")
-    parser.add_argument("--inset-days", type=int, default=200,
-                        help="length of the callout window in days; 0 disables")
-    parser.add_argument("--active-kw", type=float, default=0.1,
-                        help="power in kW above which a building counts as "
-                             "cooling; matches the active threshold used in "
-                             "the stock-diversity figure")
     parser.add_argument("--out-fig", type=Path,
                         default=Path("img/us_timeseries_comparison.png"))
     args = parser.parse_args()
@@ -110,7 +100,6 @@ def main():
     t_out_min, t_out_max = +1e9, -1e9
     kw_max_pos, kw_max_neg = 0.0, 0.0  # left-axis bounds (heating+, cooling-)
     x_min, x_max = None, None
-    inset_src = None
 
     for ax_idx, (cid, state, zone, _, _) in enumerate(COUNTIES):
         ax = axes[ax_idx]
@@ -160,11 +149,6 @@ def main():
         ax.plot(idx, -sc50, color="#0e436b", lw=0.8, ls="-", alpha=0.95,
                 label="Simulation cooling")
         ax.axhline(0, color="black", lw=0.5, alpha=0.6)
-        # Stash the cooling bands of the requested zone so a zoom inset can be
-        # drawn after the shared axis limits are fixed.
-        if zone == args.inset_zone:
-            inset_src = dict(ax=ax, real_c=real_c, sim_c=sim_c,
-                             panel_index=ax_idx)
         # Track global kW range across zones to unify the left axis later.
         # Track x-axis bounds so we can tighten the plot to the data span.
         if x_min is None or idx.min() < x_min: x_min = idx.min()
@@ -216,53 +200,6 @@ def main():
     if x_min is not None and x_max is not None:
         for ax in axes:
             ax.set_xlim(x_min, x_max)
-    # ---- Cooling-activity callout ----
-    # The median band shows how deep cooling runs, not how often. Since the
-    # difference against the reference is a difference in operating hours
-    # rather than in depth, a zoom on the band shows agreement and hides the
-    # point. This callout instead plots the share of buildings cooling on each
-    # day, which is the quantity the deficit lives in.
-    if inset_src is not None and args.inset_days > 0:
-        ax = inset_src["ax"]
-        rc, sc = inset_src["real_c"], inset_src["sim_c"]
-        lo = pd.Timestamp(args.inset_start)
-        if rc.index.tz is not None:
-            lo = lo.tz_localize(rc.index.tz)
-        hi = lo + pd.Timedelta(days=args.inset_days)
-        m = (rc.index >= lo) & (rc.index < hi)
-        if m.sum() > 0:
-            r_share = (rc[m] > args.active_kw).mean(axis=1).resample("D").mean()
-            s_share = (sc[m] > args.active_kw).mean(axis=1).resample("D").mean()
-            axins = ax.inset_axes([0.34, 0.47, 0.62, 0.38])
-            # The outdoor-temperature twin is a sibling Axes drawn after this
-            # panel, so it has to be pushed behind explicitly or its line runs
-            # straight through the callout.
-            twin_axes[inset_src["panel_index"]].set_zorder(0.5)
-            ax.set_zorder(1.0)
-            axins.set_zorder(5.0)
-            axins.set_facecolor("white")
-            axins.patch.set_alpha(1.0)
-            axins.fill_between(r_share.index, 0, r_share.values,
-                               color="#a6a6a6", alpha=0.35, linewidth=0)
-            axins.plot(r_share.index, r_share.values, color="#555555", lw=1.0,
-                       label="_nolegend_")
-            axins.plot(s_share.index, s_share.values, color="#1565a8", lw=1.4,
-                       label="_nolegend_")
-            axins.set_ylim(0, 1.02)
-            axins.set_xlim(r_share.index.min(), r_share.index.max())
-            axins.set_ylabel("Share cooling", fontsize=7)
-            axins.xaxis.set_major_locator(mdates.MonthLocator())
-            axins.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
-            axins.tick_params(labelsize=7)
-            axins.grid(True, axis="y", linestyle=":", alpha=0.5, linewidth=0.6)
-            # Colours match the shared figure legend, so no second key.
-            axins.text(0.5, 1.06,
-                       f"Share of buildings cooling (>{args.active_kw:g}\u2009kW)",
-                       transform=axins.transAxes, ha="center", va="bottom",
-                       fontsize=7.5)
-            for sp in axins.spines.values():
-                sp.set_linewidth(0.8)
-
     axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%b"))
     axes[-1].xaxis.set_major_locator(mdates.MonthLocator())
     # Shared legend below the panel grid
