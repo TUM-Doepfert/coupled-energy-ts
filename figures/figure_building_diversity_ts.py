@@ -279,6 +279,11 @@ def main():
                    help="Path of the PNG output. A matching .pdf is written "
                         "alongside it for camera-ready paper inclusion.")
     p.add_argument("--min-cooling-kwh", type=float, default=5.0)
+    p.add_argument("--sensible-overlay", action="store_true",
+                   help="overlay the sensible-only cooling median as a dashed "
+                        "line beneath the total; off by default because the "
+                        "latent share is small in the German instantiation and "
+                        "the extra line crowds the panel")
     p.add_argument("--seed", type=int, default=7,
                    help="Seed for the location-shuffle in the auto-picker. "
                         "Change to land on a different building.")
@@ -296,7 +301,7 @@ def main():
         args.output_dir, args.weather_dir, loc, args.archetype_id
     )
     render(t_out, q_heat, q_cool, args.out_fig, loc, args.archetype_id,
-           q_cool_sens=q_cool_sens)
+           q_cool_sens=q_cool_sens if args.sensible_overlay else None)
 
 
 if __name__ == "__main__":
