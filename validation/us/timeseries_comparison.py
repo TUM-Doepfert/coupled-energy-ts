@@ -135,15 +135,15 @@ def main():
         # EULP heating (grey, solid). Single "Reference" legend entry; the
         # cooling reference line below shares the same style and is not
         # re-labelled.
-        ax.fill_between(idx, rh25, rh75, color="#a6a6a6", alpha=0.2, linewidth=0)
-        ax.plot(idx, rh50, color="#555555", lw=0.7, alpha=0.9, label="Reference")
+        ax.fill_between(idx, rh25, rh75, color="#bfbfbf", alpha=0.25, linewidth=0)
+        ax.plot(idx, rh50, color="#8c8c8c", lw=0.7, alpha=0.9, label="Reference")
         # Sim heating (red, dashed)
         ax.fill_between(idx, sh25, sh75, color="#c0392b", alpha=0.2, linewidth=0)
         ax.plot(idx, sh50, color="#9c2718", lw=0.8, ls="-", alpha=0.95,
                 label="Simulation heating")
         # EULP cooling, mirrored below zero (grey, solid; no separate legend entry)
-        ax.fill_between(idx, -rc75, -rc25, color="#a6a6a6", alpha=0.2, linewidth=0)
-        ax.plot(idx, -rc50, color="#555555", lw=0.7, alpha=0.9)
+        ax.fill_between(idx, -rc75, -rc25, color="#bfbfbf", alpha=0.25, linewidth=0)
+        ax.plot(idx, -rc50, color="#8c8c8c", lw=0.7, alpha=0.9)
         # Sim cooling, mirrored below zero (blue, dashed)
         ax.fill_between(idx, -sc75, -sc25, color="#1565a8", alpha=0.2, linewidth=0)
         ax.plot(idx, -sc50, color="#0e436b", lw=0.8, ls="-", alpha=0.95,
