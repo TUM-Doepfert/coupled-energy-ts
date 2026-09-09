@@ -7,9 +7,10 @@ Key conversions:
     ``out.load.heating.energy_delivered.kbtu``
   - Cooling thermal: EULP's published delivered load
     ``out.load.cooling.energy_delivered.kbtu``
-  - Electricity total: sum of all electricity end-uses, EXCLUDING heating &
-    cooling electric inputs (so we have the "household" electricity you'd
-    measure at the meter without HVAC).
+  - Electricity total: household electricity as a meter would record it,
+    excluding the electric heating and cooling generation themselves. This
+    covers the 17 "power" end-uses plus the water heater and the heat
+    distribution pump; the air-conditioning fan stays out, matching Record E.
 
 The thermal columns are taken directly from the archive rather than
 reconstructed from fuel and electricity consumption. Reconstruction requires
@@ -158,6 +159,19 @@ HEATING_LOAD_COL = "out.load.heating.energy_delivered.kbtu"
 COOLING_LOAD_COL = "out.load.cooling.energy_delivered.kbtu"
 KBTU_TO_KWH = 293.071 / 1000.0   # 1 kBtu = 0.293071 kWh
 
+# Household electricity that a meter would record but that the 17-column
+# "power" list below omits. Record E of the released German dataset is a
+# whole-household meter, so it contains the water heater and the heat
+# distribution pump of a non-electric heating system. Reconstructing the US
+# equivalent without them understated internal gains. The air-conditioning
+# fan is deliberately NOT included: Record E excludes air-conditioning, and
+# folding its fan back in would reintroduce the double counting that the
+# exclusion exists to prevent.
+HOUSEHOLD_EXTRA_COLS = (
+    "out.electricity.hot_water.energy_consumption",
+    "out.electricity.heating_fans_pumps.energy_consumption",
+)
+
 # Explicit 17-column "power" list (matches thesis pipeline / Columns.xlsx).
 # This is the household behavioural electricity used to drive occupancy
 # detection; intentionally excludes HVAC electric (heating/cooling),
@@ -202,7 +216,10 @@ def convert_building(
         COOLING_ELEC_COL, COOLING_FANS_COL,
         HEATING_LOAD_COL, COOLING_LOAD_COL,
         *HEATING_FUEL_COLS_FOSSIL,
+        *HOUSEHOLD_EXTRA_COLS,
     ]
+    # HEATING_FANS_COL appears in both lists; pyarrow rejects duplicates.
+    cols = list(dict.fromkeys(cols))
     df = pd.read_parquet(raw_path, columns=cols)
     # EULP labels each interval at its END (the first row of 2018 is
     # 00:15, the last is 2019-01-01 00:00). Our weather grid and the
@@ -228,7 +245,8 @@ def convert_building(
     # end-uses (lighting, plug loads, large appliances, ventilation, well/pool
     # pumps, hot tub). Matches the thesis pipeline and Columns.xlsx category
     # "power". Excludes HVAC electric, DHW, and EV charging.
-    elec_household_kwh = sum(df[c].fillna(0.0) for c in POWER_COLS_17)
+    elec_household_kwh = (sum(df[c].fillna(0.0) for c in POWER_COLS_17)
+                          + sum(df[c].fillna(0.0) for c in HOUSEHOLD_EXTRA_COLS))
 
     out = pd.DataFrame({
         "timestamp": df["timestamp"].values,
