@@ -41,6 +41,26 @@ def _drop_low_signal(metrics_df: pd.DataFrame, zone: str,
     return sub["bldg_id"].astype(int).tolist()
 
 
+
+PSC_COL = "in.hvac_cooling_partial_space_conditioning"
+
+
+def _full_space_ids(metadata_pq):
+    """bldg_ids the reference cools in full.
+
+    ResStock sizes the cooling system for the conditioned fraction only, so a
+    partially conditioned dwelling carries a nameplate far below the
+    whole-dwelling value while our single-zone model conditions all of it and
+    is capped at that nameplate. Such buildings are not comparable on cooling
+    and are dropped from the cooling bands.
+    """
+    if not metadata_pq or not Path(metadata_pq).exists():
+        return None
+    md = pd.read_parquet(metadata_pq, columns=[PSC_COL]).reset_index()
+    keep = md[md[PSC_COL].astype(str).str.strip() == "100% Conditioned"]
+    return set(keep["bldg_id"].astype(int).tolist())
+
+
 def load_zone_panel(rp: Path, sp: Path, bldg_ids: list[int]):
     """Read real + sim parquet for a zone, restrict to informative buildings,
     pivot to hour-by-building matrices, and return (real_h, real_c, sim_h, sim_c)
@@ -71,11 +91,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path,
                         default=Path("validation/us/data"))
+    parser.add_argument("--metadata", type=Path,
+        default=Path("validation/us/data/metadata.parquet"),
+        help="EULP metadata parquet; supplies the partial-space-conditioning "
+             "field used to exclude non-comparable cooling buildings.")
+    parser.add_argument("--keep-partial-space", action="store_true",
+        help="Keep partially conditioned dwellings in the cooling bands.")
     parser.add_argument("--metrics-csv", type=Path,
                         default=Path("validation/us/data/building_comparison_metrics.csv"))
     parser.add_argument("--out-fig", type=Path,
                         default=Path("img/us_timeseries_comparison.png"))
     args = parser.parse_args()
+
+    FULL_IDS = None if args.keep_partial_space else _full_space_ids(args.metadata)
+    if FULL_IDS is None and not args.keep_partial_space:
+        print("[warn] metadata.parquet not found; partial-space filter disabled")
 
     if not args.metrics_csv.exists():
         sys.exit(f"Missing {args.metrics_csv}; run building_comparison.py first.")
@@ -117,6 +147,13 @@ def main():
 
         weather = load_weather_simple(wp)
         real_h, real_c, sim_h, sim_c = load_zone_panel(rp, sp, bldg_ids)
+        if FULL_IDS is not None:
+            cool_ids = [b for b in bldg_ids if b in FULL_IDS]
+            keep_c = [c for c in real_c.columns if c in set(cool_ids)]
+            real_c = real_c[keep_c]
+            sim_c = sim_c[[c for c in sim_c.columns if c in set(cool_ids)]]
+        else:
+            cool_ids = bldg_ids
         # Make all four matrices share the same time index for clean percentile arithmetic
         idx = real_h.index.intersection(sim_h.index)
         real_h = real_h.loc[idx]; real_c = real_c.loc[idx]
@@ -180,7 +217,7 @@ def main():
         # Per-panel legend removed; a shared legend is placed below the figure.
 
 
-        print(f"  {zone:12s}  n={len(bldg_ids):3d}  "
+        print(f"  {zone:12s}  n_heat={len(bldg_ids):3d} n_cool={len(cool_ids):3d}  "
               f"heat sim/real median@max-day={sh50.max()/max(rh50.max(),0.01):.2f}")
 
     # Unify the left-side kW axis across all panels so heating-vs-cooling

@@ -31,6 +31,10 @@ METADATA_COLUMNS_KEEP = [
     "in.window_areas", "in.windows",
     # HVAC
     "in.hvac_cooling_type", "in.hvac_cooling_efficiency",
+    # Share of the floor area the cooling system actually serves. ResStock
+    # sizes the system for that fraction, so it is needed to tell which
+    # buildings are comparable against a whole-dwelling single-zone model.
+    "in.hvac_cooling_partial_space_conditioning",
     "in.hvac_heating_type", "in.hvac_heating_type_and_fuel",
     "in.hvac_heating_efficiency", "in.heating_fuel",
     # Setpoints + setback schedules (needed for US per-building)

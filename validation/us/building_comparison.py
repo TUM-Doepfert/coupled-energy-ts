@@ -80,10 +80,35 @@ def _load_qualified(data_dir, cid, zone_safe):
         return None
     keep = ["bldg_id", "in.sqft", "in.geometry_stories", "in.vintage",
             "in.infiltration", "in.heating_setpoint", "in.cooling_setpoint",
-            "in.hvac_heating_type_and_fuel"]
+            "in.hvac_heating_type_and_fuel", "in.hvac_cooling_type"]
     df = pd.read_csv(csv, usecols=lambda c: c in keep)
     df["area_m2"] = df["in.sqft"].astype(float) * SQFT_TO_M2
     return df
+
+
+PSC_COL = "in.hvac_cooling_partial_space_conditioning"
+PSC_FRACTION = {
+    "100% Conditioned": 1.0, "80% Conditioned": 0.8, "60% Conditioned": 0.6,
+    "40% Conditioned": 0.4, "20% Conditioned": 0.2, "<10% Conditioned": 0.1,
+}
+
+
+def _load_partial_conditioning(metadata_pq):
+    """Per-building share of floor area the reference actually cools.
+
+    ResStock sizes the cooling system for the conditioned fraction only, so
+    a dwelling cooled at 20% carries a nameplate about a fifth of the
+    whole-dwelling value. Our single-zone model conditions the whole
+    dwelling and is capped at that nameplate, so partially conditioned
+    dwellings are not comparable and are excluded from the cooling metrics.
+    """
+    if not metadata_pq or not Path(metadata_pq).exists():
+        return None
+    md = pd.read_parquet(metadata_pq, columns=[PSC_COL]).reset_index()
+    md[PSC_COL] = md[PSC_COL].astype(str).str.strip()
+    md["cool_space_fraction"] = md[PSC_COL].map(PSC_FRACTION)
+    md["full_space_cooling"] = md["cool_space_fraction"] >= 1.0
+    return md[["bldg_id", PSC_COL, "cool_space_fraction", "full_space_cooling"]]
 
 
 def main():
@@ -99,6 +124,13 @@ def main():
     parser.add_argument("--outlier-ratio", type=float, default=3.0,
         help="Flag a building as outlier if max(sim/real, real/sim) > this.")
     parser.add_argument("--top-n-outliers", type=int, default=10)
+    parser.add_argument("--metadata", type=Path,
+        default=Path("validation/us/data/metadata.parquet"),
+        help="EULP metadata parquet, read for the partial-space-conditioning "
+             "field used to exclude non-comparable cooling buildings.")
+    parser.add_argument("--keep-partial-space", action="store_true",
+        help="Keep partially conditioned dwellings in the cooling metrics. "
+             "Off by default; see _load_partial_conditioning.")
     parser.add_argument("--min-real-mwh", type=float, default=1.0,
         help="Buildings with real annual energy < this MWh are excluded "
              "from per-variable metrics (heating or cooling) as "
@@ -122,6 +154,10 @@ def main():
         "legend.fontsize": 14,
     })
     fig, axes = plt.subplots(2, 6, figsize=(18, 7))
+
+    psc = _load_partial_conditioning(args.metadata)
+    if psc is None:
+        print("[warn] metadata.parquet not found; partial-space filter disabled")
 
     for col_idx, (cid, state, zone, _, _) in enumerate(COUNTIES):
         zone_safe = zone.replace(" ", "_")
@@ -166,6 +202,13 @@ def main():
             m = m.merge(meta, on="bldg_id", how="left")
         else:
             m["area_m2"] = np.nan
+        if psc is not None:
+            m = m.merge(psc, on="bldg_id", how="left")
+            m["full_space_cooling"] = m["full_space_cooling"].fillna(True)
+        else:
+            m[PSC_COL] = "unknown"
+            m["cool_space_fraction"] = np.nan
+            m["full_space_cooling"] = True
         m["county"] = cid; m["zone"] = zone
 
         # per-m^2 normalization
@@ -188,6 +231,7 @@ def main():
         # Mark low-real-signal buildings for exclusion from per-variable metrics
         m["low_signal_heat"] = m["energy_real_kwh_heat"] < args.min_real_mwh * 1000
         m["low_signal_cool"] = m["energy_real_kwh_cool"] < args.min_real_mwh * 1000
+        m["partial_space_cool"] = (~m["full_space_cooling"]) & (not args.keep_partial_space)
 
         # ── Plots: log-log, per m^2 ──
         for row_idx, (var, color, ylabel, xlabel) in enumerate([
@@ -196,6 +240,8 @@ def main():
         ]):
             ax = axes[row_idx, col_idx]
             mask_low = m[f"low_signal_{var}"]
+            if var == "cool":
+                mask_low = mask_low | m["partial_space_cool"]
             x = m[f"{var}_real_kwh_m2"].clip(lower=0.5)
             y = m[f"{var}_sim_kwh_m2"].clip(lower=0.5)
             # Plot only informative buildings; low-signal ones are flagged
@@ -285,9 +331,11 @@ def main():
         print(agg_h.to_string())
 
         print(f"\n=== Per-zone cooling diagnostics (excluding real<{args.min_real_mwh:g} MWh/yr) ===")
-        df_c = df[~df["low_signal_cool"]]
+        df_c = df[~df["low_signal_cool"] & ~df["partial_space_cool"]]
         n_dropped_c = df.groupby("zone").apply(
             lambda g: int(g["low_signal_cool"].sum()))
+        n_dropped_psc = df.groupby("zone").apply(
+            lambda g: int((g["partial_space_cool"] & ~g["low_signal_cool"]).sum()))
         agg_kwargs = dict(
             n_used=("bldg_id","count"),
             cool_r_med=("r_q_cool_w","median"),
@@ -304,6 +352,7 @@ def main():
             agg_kwargs["latent_share_sim_med"] = ("latent_share_sim", "median")
         agg_c = df_c.groupby("zone").agg(**agg_kwargs).round(2)
         agg_c["n_dropped_lowsig"] = n_dropped_c
+        agg_c["n_dropped_partial"] = n_dropped_psc
         print(agg_c.to_string())
 
 

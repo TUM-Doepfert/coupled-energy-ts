@@ -80,6 +80,24 @@ def _wide(df: pd.DataFrame, value_col: str) -> pd.DataFrame:
               / 1000.0).sort_index()
 
 
+
+PSC_COL = "in.hvac_cooling_partial_space_conditioning"
+# bldg_ids the reference cools in full. ResStock sizes the cooling system for
+# the conditioned fraction only, so a partially conditioned dwelling carries a
+# nameplate far below the whole-dwelling value while our single-zone model
+# conditions all of it and is capped at that nameplate. Those buildings are not
+# comparable on cooling and are excluded from the cooling views.
+FULL_SPACE_IDS: set | None = None
+
+
+def load_full_space_ids(metadata_pq) -> set | None:
+    if not metadata_pq or not Path(metadata_pq).exists():
+        return None
+    md = pd.read_parquet(metadata_pq, columns=[PSC_COL]).reset_index()
+    keep = md[md[PSC_COL].astype(str).str.strip() == "100% Conditioned"]
+    return set(keep["bldg_id"].tolist())
+
+
 def load_pair(county_id: str, zone: str, data_dir: Path,
               modes: tuple[str, ...] = ("heat", "cool")
               ) -> dict[str, tuple[pd.DataFrame, pd.DataFrame]] | None:
@@ -102,6 +120,8 @@ def load_pair(county_id: str, zone: str, data_dir: Path,
         n_w = _wide(n, nrel_col)
         s_w = _wide(s, sim_col)
         common_b = sorted(set(n_w.columns) & set(s_w.columns))
+        if mode == "cool" and FULL_SPACE_IDS is not None:
+            common_b = [b for b in common_b if b in FULL_SPACE_IDS]
         common_t = n_w.index.intersection(s_w.index)
         if not common_b or len(common_t) == 0:
             continue
@@ -437,6 +457,12 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    p.add_argument("--metadata", type=Path,
+        default=Path("validation/us/data/metadata.parquet"),
+        help="EULP metadata parquet; supplies the partial-space-conditioning "
+             "field used to exclude non-comparable cooling buildings.")
+    p.add_argument("--keep-partial-space", action="store_true",
+        help="Keep partially conditioned dwellings in the cooling views.")
     p.add_argument("--data-dir", type=Path,
                    default=ROOT / "validation" / "us" / "data")
     p.add_argument("--out", type=Path,
@@ -463,6 +489,15 @@ def main() -> None:
                         "only, robust to per-building peak inflation from "
                         "morning recovery spikes.")
     args = p.parse_args()
+
+    global FULL_SPACE_IDS
+    if not args.keep_partial_space:
+        FULL_SPACE_IDS = load_full_space_ids(args.metadata)
+        if FULL_SPACE_IDS is None:
+            print("[warn] metadata.parquet not found; partial-space filter disabled")
+        else:
+            print(f"[filter] cooling views restricted to "
+                  f"{len(FULL_SPACE_IDS)} fully conditioned buildings")
 
     # Default behaviour: combined LDC + active-share per zone
     do_combined = args.combined or (not args.ldc and not args.share)
